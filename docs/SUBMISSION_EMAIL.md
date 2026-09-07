@@ -16,11 +16,13 @@ WORKFLOW 2 — Telegram Receipt Photo Processing
 - Extracted data is inserted into the "Receipts" tab of the same Google Sheet, keyed by the Telegram file ID so re-sent photos are detected as duplicates instead of double-counted.
 - The original photo is saved to Google Drive under PDS_Receipts/<YYYY-MM-DD>/, grouped in folders by submission date, and the bot replies on Telegram with a confirmation (or a review request when it isn't fully sure about a receipt).
 
-WHAT'S IN THE ATTACHED PACKAGE (PDS_n8n_Portfolio.zip)
+The complete package is on GitHub: https://github.com/pihuts/pds-n8n-portfolio
 
 - workflows/ — both import-ready n8n workflow .json files, validated by import into n8n 2.37.10. They ship inactive with placeholder credentials, and no secrets are embedded anywhere (the Gemini key is added in the n8n UI as a Header-Auth credential, never stored in the workflow files).
 - docs/ — SETUP.md (a ~20-minute setup guide plus a smoke-test checklist), SHEETS_SCHEMA.md (the exact sheet tabs and headers to create), ARCHITECTURE.md (design decisions: dedupe keys, folder-creation logic, failure handling, retry behavior), and TEST_REPORT.md (test coverage and results).
 - tests/ — runnable structural validators and unit tests covering the workflow logic, plus the sample receipt images used in the live vision tests. In testing, receipts ranging from a modern German grocery receipt to a faded 1994 Tesco thermal receipt and a handwritten restaurant bill were all read back correctly (merchant, amount, date) — details in TEST_REPORT.md.
+
+A zipped copy (PDS_n8n_Portfolio.zip) is attached to this reply as well, with identical contents.
 
 Setup on your side is minimal: import both workflow files into n8n, paste the Sheet and Drive folder IDs into each workflow's Config node, connect Google/Telegram credentials, add the Gemini API key as a Header-Auth credential, and activate. All steps are in docs/SETUP.md.
 
