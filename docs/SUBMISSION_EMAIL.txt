@@ -1,0 +1,31 @@
+Subject: Re: PDS Assessment — n8n Portfolio
+To: embarriga@pds.dbello.com
+
+Hi Ms. Barriga,
+
+Thank you for the opportunity. I have completed the application form, and my assessment portfolio for both workflows is ready:
+
+Portfolio: https://github.com/pihuts/pds-n8n-portfolio
+(Zipped copy attached as PDS_n8n_Portfolio.zip)
+
+WORKFLOW 1 — Multi-Label Gmail to Google Sheets & Drive
+- Checks the inbox every 15 minutes with one Gmail query covering all configured labels (label1, label2, label3, ...), skipping already-processed mail.
+- Extracts sender name/email, subject, date, label, and snippet into the Emails sheet — keyed by message ID so reruns never duplicate rows.
+- Downloads attachments to Drive with their original filenames, logged in the Attachments sheet.
+- Groups them in folders by label and date received, folder named after the sender: <Label>/<YYYY-MM-DD>/<Sender Name>/.
+
+WORKFLOW 2 — Telegram Receipt Photo Processing
+- Accepts receipt photos via a Telegram bot (usage reply for non-photos, 15 MB size guard).
+- Extracts merchant, amount, currency, date, category, and items with Google Gemini (2.0 Flash, JSON mode); low-confidence results are flagged for review.
+- Inserts the data into the Receipts sheet, keyed by Telegram file ID so re-sent photos are detected as duplicates.
+- Saves the original photo to Drive under <YYYY-MM-DD>/ folders by submission date, and confirms back on Telegram.
+
+The repo includes the two import-ready workflow files (validated by import into n8n 2.37.10, shipping inactive with no secrets embedded), a ~20-minute SETUP guide, the exact sheet schemas, architecture notes, and test results — including live vision tests where modern, faded, and handwritten receipts were all read back correctly.
+
+Setup: import the workflows, paste your Sheet/Drive IDs into each Config node, connect Google/Telegram credentials, add the Gemini key as a Header-Auth credential, activate. Full steps in docs/SETUP.md.
+
+Happy to walk through either workflow live in the next stage.
+
+Best regards,
+[Your Name]
+[Mobile] · [LinkedIn/Portfolio — if any]
