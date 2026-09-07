@@ -78,3 +78,25 @@ tests/fixtures/real_*.jpg with ground truth read independently first.
   unlabeled until fully handled.
 - Telegram `file_size` is absent on some photo sizes; oversize then enforces
   after download rather than before (still enforced).
+
+
+## In-engine verification (n8n 2.37.10, live run 2026-09-07)
+
+Beyond the offline harness above, the vision chain was executed INSIDE a real n8n
+instance (Docker, n8n 2.37.10) to prove the production node chain works in-engine:
+
+- Both portfolio workflows import cleanly into n8n 2.37.10 (0 defects, 0 warnings).
+- A demo harness workflow (`demo/demo_receipt_vision_chain.json`) mirrors W2's
+  hot path with a Webhook trigger instead of Telegram: Download photo ->
+  **Photo to Base64 (verbatim W2 code)** -> vision HTTP call -> **Parse Receipt
+  JSON (same validation as W2, reading an OpenAI-compatible reply shape with a
+  Gemini `candidates[]` fallback)**.
+- Live run: webhook POST with a real receipt photo -> vision model (glm-5.3-flash
+  via an OpenAI-compatible endpoint) -> validated record. Result in 11.2s:
+  merchant JOLLIBEE - ALABANG TOWN CENTER, amount 468.16 PHP, date 2026-09-07,
+  category Food, 3 line items, confidence 0.95, needs_review=false.
+- Evidence: `docs/images/demo_run.mp4` (screen recording of the live run) and
+  `docs/images/demo_*.png` (green-node canvas, node detail views, executions tab).
+- The demo webhook supplies the vision API key per request; it is built into the
+  Authorization header at runtime and never persisted in workflow JSON, item
+  data, or this repository.

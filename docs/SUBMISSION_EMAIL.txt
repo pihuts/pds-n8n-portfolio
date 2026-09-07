@@ -6,7 +6,6 @@ Hi Ms. Barriga,
 Thank you for the opportunity. I have completed the application form, and my assessment portfolio for both workflows is ready:
 
 Portfolio: https://github.com/pihuts/pds-n8n-portfolio
-(Zipped copy attached as PDS_n8n_Portfolio.zip)
 
 WORKFLOW 1 — Multi-Label Gmail to Google Sheets & Drive
 - Checks the inbox every 15 minutes with one Gmail query covering all configured labels (label1, label2, label3, ...), skipping already-processed mail.

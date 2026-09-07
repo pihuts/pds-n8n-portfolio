@@ -1,0 +1,252 @@
+{
+  "name": "PDS DEMO \u2014 Receipt Vision Chain (no Telegram/Google creds)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "receipt-demo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "demo-webhook",
+      "name": "Webhook Receipt Demo",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "edef462c-b39f-45af-9c45-5d1f4cda9c53"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Mimic Extract Telegram Meta output from a plain webhook body.\nconst b = $input.item.json.body || $input.item.json;\nconst d = new Date();\nconst pad = n => String(n).padStart(2, '0');\nconst submissionDate = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;\nreturn { json: {\n  telegram_user: b.telegram_user || 'Peter (demo)',\n  file_unique_id: b.file_unique_id || ('demo-' + Date.now()),\n  telegram_message_id: b.telegram_message_id || 0,\n  submission_date: submissionDate,\n  submission_iso: d.toISOString(),\n  caption: b.caption || '',\n  image_url: b.image_url,\n  go_key: b.go_key || ''\n}};"
+      },
+      "id": "demo-meta",
+      "name": "Build Demo Meta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.image_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "demo-download",
+      "name": "Download Receipt Photo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// VERBATIM from W2 'Photo to Base64' (production workflow).\nconst bin = $input.item.binary || {};\nconst key = bin.data ? 'data' : Object.keys(bin)[0];\nif (!key || !bin[key]) throw new Error('Telegram file binary missing');\nconst buffer = await this.helpers.getBinaryDataBuffer(0, key);\nconst b64data = buffer.toString('base64');\nif (!b64data || b64data.length < 100) throw new Error('Empty image buffer from Telegram file');\nconst mime = bin[key].mimeType || 'image/jpeg';\nconst prompt = 'You are a receipt OCR extractor. Read this receipt photo and reply with ONLY a compact JSON object, no markdown, no extra text. Keys and rules: merchant (store name, string, or Unknown), amount (grand total as a plain number, no currency symbols), currency (3-letter code, default PHP), receipt_date (YYYY-MM-DD as printed, or empty string if not visible), category (one of: Food, Transport, Office, Utilities, Healthcare, Shopping, Other), items (array of up to 8 short item names), confidence (0 to 1 self-score), notes (one short sentence or empty string).';\nreturn {\n  json: { image_b64: b64data, mime_type: mime, gemini_prompt: prompt },\n  binary: $input.item.binary\n};"
+      },
+      "id": "demo-b64",
+      "name": "Photo to Base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Build an OpenAI-compatible vision request for the opencode Go endpoint.\n// The API key arrives via the webhook payload and is NEVER persisted.\nlet meta = {};\ntry { meta = $('Build Demo Meta').item.json; } catch (e) { meta = $('Build Demo Meta').first().json; }\nconst j = $input.item.json;\nconst body = {\n  model: 'glm-5.3-flash',\n  messages: [{ role: 'user', content: [\n    { type: 'text', text: j.gemini_prompt },\n    { type: 'image_url', image_url: { url: 'data:' + j.mime_type + ';base64,' + j.image_b64 } }\n  ]}],\n  temperature: 0.1, max_tokens: 400\n};\nreturn { json: {\n  vision_url: 'https://opencode.ai/zen/go/v1/chat/completions',\n  session_header: 'demo-receipt-vision-01',\n  body_string: JSON.stringify(body)\n}};"
+      },
+      "id": "demo-prep",
+      "name": "Prepare Vision Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.vision_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Build Demo Meta').first().json.go_key }}"
+            },
+            {
+              "name": "x-opencode-session",
+              "value": "={{ $json.session_header }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body_string }}",
+        "options": {
+          "timeout": 90000
+        }
+      },
+      "id": "demo-vision",
+      "name": "Vision Extract (opencode Go)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Demo variant of W2 'Parse Receipt JSON': reads an OpenAI-compatible\n// reply (choices[0].message.content) with Gemini candidates[] fallback,\n// then applies the SAME validation/normalization as production.\nfunction get(obj, path, fb) { try { let cur = obj; for (const k of path) cur = cur?.[k]; return cur ?? fb; } catch (e) { return fb; } }\nconst resp = $input.item.json;\nlet raw = get(resp, ['choices', 0, 'message', 'content'], '');\nif (!raw) raw = get(resp, ['candidates', 0, 'content', 'parts', 0, 'text'], '');\nif (Array.isArray(raw)) raw = raw.map(p => p.text || '').join('');\nraw = String(raw || '').replace(/```[a-zA-Z]*\\\\n?/g, '').replace(/```/g, '').trim();\nconst m = raw.match(/\\\\{[\\\\s\\\\S]*\\\\}/);\nlet data = {};\ntry { data = JSON.parse(m ? m[0] : raw); } catch (e) { data = {}; }\nlet meta = {};\ntry { meta = $('Build Demo Meta').item.json; } catch (e) { meta = {}; }\nlet amount = Number(String(data.amount ?? '').replace(/[^0-9.\\\\-]/g, ''));\nif (!isFinite(amount)) amount = 0;\nlet currency = String(data.currency || 'PHP').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'PHP';\nlet receiptDate = String(data.receipt_date || '');\nif (!/^\\\\d{4}-\\\\d{2}-\\\\d{2}$/.test(receiptDate)) receiptDate = meta.submission_date || '';\nlet confidence = Number(data.confidence);\nif (!isFinite(confidence)) confidence = 0;\nif (confidence > 1 && confidence <= 100) confidence = confidence / 100;\nconfidence = Math.min(1, Math.max(0, confidence));\nconst merchant = String(data.merchant || '').trim() || 'Unknown';\nconst minConf = 0.6;\nconst needsReview = (!merchant || merchant === 'Unknown' || amount <= 0 || confidence < minConf);\nconst items = Array.isArray(data.items) ? data.items.map(String).slice(0, 8).join('; ') : '';\nconst category = String(data.category || 'Other');\nreturn { json: {\n  submission_date: meta.submission_date || '',\n  telegram_user: meta.telegram_user || '',\n  file_unique_id: meta.file_unique_id || '',\n  merchant, amount, currency, receipt_date: receiptDate,\n  category, items,\n  confidence: Math.round(confidence * 100) / 100,\n  needs_review: needsReview,\n  notes: String(data.notes || '').slice(0, 300),\n  source_image: meta.image_url || '',\n  processed_at: new Date().toISOString()\n}};"
+      },
+      "id": "demo-parse",
+      "name": "Parse Receipt JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "id": "demo-respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## PDS DEMO \u2014 live receipt vision chain in n8n\nWebhook POST supplies { image_url, go_key } per request (key never stored in n8n or the repo).\n'Photo to Base64' is VERBATIM from W2; Parse applies the SAME validation as production, reading an OpenAI-compatible reply with a Gemini-shape fallback.",
+        "height": 300,
+        "width": 1100,
+        "color": 5
+      },
+      "id": "demo-note",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        40
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Receipt Demo": {
+      "main": [
+        [
+          {
+            "node": "Build Demo Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Demo Meta": {
+      "main": [
+        [
+          {
+            "node": "Download Receipt Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Receipt Photo": {
+      "main": [
+        [
+          {
+            "node": "Photo to Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Photo to Base64": {
+      "main": [
+        [
+          {
+            "node": "Prepare Vision Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Vision Request": {
+      "main": [
+        [
+          {
+            "node": "Vision Extract (opencode Go)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vision Extract (opencode Go)": {
+      "main": [
+        [
+          {
+            "node": "Parse Receipt JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Receipt JSON": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Manila"
+  },
+  "id": "aaaaaaaa-demo-4a4d-bf52-demo00000001",
+  "versionId": "demo-1.0.0"
+}
