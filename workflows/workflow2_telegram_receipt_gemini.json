@@ -1,0 +1,1231 @@
+{
+  "id": "c7e3adfa-de39-4a4d-bf52-9308a299ffc6",
+  "name": "PDS W2 — Telegram Receipt Photo Processing (Gemini)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "options": {}
+      },
+      "id": "w2-trigger",
+      "name": "Telegram Trigger Photo",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        420
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot API — connect in n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-sheetsDocId",
+              "name": "sheetsDocId",
+              "type": "string",
+              "value": "PASTE_GOOGLE_SHEET_ID_HERE"
+            },
+            {
+              "id": "cfg-driveParentId",
+              "name": "driveParentId",
+              "type": "string",
+              "value": "PASTE_DRIVE_RECEIPTS_ROOT_FOLDER_ID_HERE"
+            },
+            {
+              "id": "cfg-driveRootName",
+              "name": "driveRootName",
+              "type": "string",
+              "value": "PDS_Receipts"
+            },
+            {
+              "id": "cfg-geminiModel",
+              "name": "geminiModel",
+              "type": "string",
+              "value": "gemini-2.0-flash"
+            },
+            {
+              "id": "cfg-minConfidence",
+              "name": "minConfidence",
+              "type": "number",
+              "value": 0.6
+            },
+            {
+              "id": "cfg-maxFileMB",
+              "name": "maxFileMB",
+              "type": "number",
+              "value": 15
+            },
+            {
+              "id": "cfg-currencyDefault",
+              "name": "currencyDefault",
+              "type": "string",
+              "value": "PHP"
+            }
+          ]
+        },
+        "options": {
+          "includeOtherFields": true
+        }
+      },
+      "id": "w2-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        420,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w2-cond-photo",
+              "leftValue": "={{ $json.message.photo }}",
+              "rightValue": "",
+              "operator": {
+                "type": "array",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w2-if-photo",
+      "name": "IF Is Photo",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        640,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Telegram Trigger Photo').item.json.message.chat.id }}",
+        "text": "Send a clear photo of your receipt and I will log it automatically. Tips: lay it flat, good lighting, all four corners visible.",
+        "additionalFields": {}
+      },
+      "id": "w2-reply-usage",
+      "name": "Telegram Reply Usage",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        860,
+        600
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot API — connect in n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Pick the largest photo size, extract submission metadata, enforce size cap.\n// Output is pure JSON (no binary yet); download happens in Telegram Get File.\nconst upd = $input.item.json;\nconst msg = upd.message || {};\nconst photos = msg.photo || [];\nif (!photos.length) throw new Error('No photo in update');\nconst best = photos[photos.length - 1];\nlet cfg = {};\ntry { cfg = $('Config').item.json; } catch (e) { cfg = $('Config').first().json; }\nconst maxBytes = (Number(cfg.maxFileMB) || 15) * 1024 * 1024;\nconst from = msg.from || {};\nconst user = [from.first_name, from.last_name].filter(Boolean).join(' ').trim() || (from.username ? '@' + from.username : 'Unknown user');\nconst ts = (msg.date || Math.floor(Date.now() / 1000)) * 1000;\nconst d = new Date(ts);\nconst pad = n => String(n).padStart(2, '0');\nconst submissionDate = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;\nreturn {\n  json: {\n    chat_id: msg.chat?.id,\n    telegram_message_id: msg.message_id,\n    telegram_user: user,\n    file_id: best.file_id,\n    file_unique_id: best.file_unique_id,\n    file_size: best.file_size || 0,\n    oversized: (best.file_size || 0) > maxBytes,\n    max_bytes: maxBytes,\n    submission_date: submissionDate,\n    submission_iso: d.toISOString(),\n    caption: msg.caption || ''\n  }\n};"
+      },
+      "id": "w2-meta",
+      "name": "Extract Telegram Meta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w2-cond-size",
+              "leftValue": "={{ $json.oversized }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w2-if-size",
+      "name": "IF Too Large",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1080,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Extract Telegram Meta').item.json.chat_id }}",
+        "text": "That photo is over the {{ $('Config').first().json.maxFileMB }} MB limit. Please send a smaller/compressed copy of the receipt.",
+        "additionalFields": {}
+      },
+      "id": "w2-reply-toolarge",
+      "name": "Telegram Reply Too Large",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1300,
+        600
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot API — connect in n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetsDocId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Receipts",
+          "mode": "list",
+          "cachedResultName": "Receipts"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "file_unique_id",
+              "lookupValue": "={{ $json.file_unique_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w2-find",
+      "name": "Sheets Find Receipt",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1300,
+        420
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w2-cond-new",
+              "leftValue": "={{ $json.file_unique_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w2-if-new",
+      "name": "IF Is New",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Extract Telegram Meta').item.json.chat_id }}",
+        "text": "That receipt is already logged — skipping duplicate. Send a new receipt photo any time.",
+        "additionalFields": {}
+      },
+      "id": "w2-reply-dup",
+      "name": "Telegram Reply Duplicate",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1740,
+        600
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot API — connect in n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "query",
+        "queryString": "={{ \"name = '\" + $('Extract Telegram Meta').item.json.submission_date.replace(/'/g, \"\\\\'\") + \"' and '\" + $('Config').first().json.driveParentId + \"' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false\" }}",
+        "returnAll": false,
+        "limit": 5,
+        "options": {}
+      },
+      "id": "w2-search-date",
+      "name": "Drive Search Date Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1740,
+        420
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w2-cond-date",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w2-if-date",
+      "name": "IF Date Folder Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1960,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "={{ $('Extract Telegram Meta').item.json.submission_date }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.driveParentId }}"
+        },
+        "options": {}
+      },
+      "id": "w2-mkdir-date",
+      "name": "Drive Create Date Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2180,
+        340
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Emit { date, folder_id } for the resolved submission-date folder.\n// Single object: forEach mode rejects array returns. Fallback uses .first()\n// (available in both modes) — $input.first() is NOT legal in forEach mode.\nlet meta = {};\ntry { meta = $('Extract Telegram Meta').item.json; }\ncatch (e) { meta = $('Extract Telegram Meta').first().json; }\nconst folderId = ($input.item.json && $input.item.json.id) || '';\nreturn { json: { date: meta.submission_date || '', folder_id: folderId } };"
+      },
+      "id": "w2-emit-date",
+      "name": "Emit Date Folder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "get",
+        "fileId": "={{ $('Extract Telegram Meta').item.json.file_id }}",
+        "download": true,
+        "additionalFields": {}
+      },
+      "id": "w2-get-file",
+      "name": "Telegram Get File",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2620,
+        420
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot API — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Encode photo bytes for Gemini inline_data (base64) and forward the\n// binary untouched for the Drive upload right after.\nconst bin = $input.item.binary || {};\nconst key = bin.data ? 'data' : Object.keys(bin)[0];\nif (!key || !bin[key]) throw new Error('Telegram file binary missing');\nconst buffer = await this.helpers.getBinaryDataBuffer(0, key);\nconst b64data = buffer.toString('base64');\nif (!b64data || b64data.length < 100) throw new Error('Empty image buffer from Telegram file');\nconst mime = bin[key].mimeType || 'image/jpeg';\nconst prompt = 'You are a receipt OCR extractor. Read this receipt photo and reply with ONLY a compact JSON object, no markdown, no extra text. Keys and rules: merchant (store name, string, or Unknown), amount (grand total as a plain number, no currency symbols), currency (3-letter code, default PHP), receipt_date (YYYY-MM-DD as printed, or empty string if not visible), category (one of: Food, Transport, Office, Utilities, Healthcare, Shopping, Other), items (array of up to 8 short item names), confidence (0 to 1 self-score), notes (one short sentence or empty string).';\nreturn {\n  json: { image_b64: b64data, mime_type: mime, gemini_prompt: prompt },\n  binary: $input.item.binary\n};"
+      },
+      "id": "w2-b64",
+      "name": "Photo to Base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2840,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Attach resolved date-folder id; carry image payload + binary forward.\nlet emit = {};\ntry { emit = $('Emit Date Folder').item.json; }\ncatch (e) { emit = { folder_id: '' }; }\nconst j = $input.item.json;\nreturn {\n  json: { ...j, date_folder_id: emit.folder_id || '', submission_date: emit.date || '' },\n  binary: $input.item.binary\n};"
+      },
+      "id": "w2-attach-date",
+      "name": "Attach Date Folder ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3060,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "name": "={{ $('Extract Telegram Meta').item.json.submission_date + '_' + $('Extract Telegram Meta').item.json.telegram_message_id + '.' + $json.mime_type.split('/')[1] }}",
+        "inputDataFieldName": "data",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.date_folder_id }}"
+        },
+        "options": {}
+      },
+      "id": "w2-upload",
+      "name": "Drive Upload Photo",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3280,
+        420
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w2-cond-upok",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w2-if-upok",
+      "name": "IF Upload OK",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3500,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://generativelanguage.googleapis.com/v1beta/models/' + $('Config').first().json.geminiModel + ':generateContent' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $('Photo to Base64').item.json.gemini_prompt }, { inline_data: { mime_type: $('Photo to Base64').item.json.mime_type, data: $('Photo to Base64').item.json.image_b64 } }] }], generationConfig: { temperature: 0.1, response_mime_type: 'application/json', maxOutputTokens: 1024 } }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "w2-gemini",
+      "name": "Gemini Vision Extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3720,
+        340
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Gemini API key — Header Auth (Name: x-goog-api-key), see docs/SETUP.md"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Gemini response -> validated receipt record. Never throws on model noise:\n// strips fences, extracts first {...}, coerces types, flags low-confidence.\nfunction get(obj, path, fb) {\n  try {\n    let cur = obj;\n    for (const k of path) cur = cur?.[k];\n    return cur ?? fb;\n  } catch (e) { return fb; }\n}\nconst resp = $input.item.json;\nlet raw = get(resp, ['candidates', 0, 'content', 'parts', 0, 'text'], '');\nif (!raw && typeof resp === 'string') raw = resp;\nraw = String(raw || '').replace(/```[a-zA-Z]*\\n?/g, '').replace(/```/g, '').trim();\nconst m = raw.match(/\\{[\\s\\S]*\\}/);\nlet data = {};\ntry { data = JSON.parse(m ? m[0] : raw); } catch (e) { data = {}; }\nlet meta = {};\ntry { meta = $('Extract Telegram Meta').item.json; } catch (e) { meta = {}; }\nlet drive = {};\ntry { drive = $('Drive Upload Photo').item.json; } catch (e) { drive = {}; }\nlet cfg = {};\ntry { cfg = $('Config').item.json; } catch (e) { cfg = $('Config').first().json; }\nlet amount = Number(String(data.amount ?? '').replace(/[^0-9.\\-]/g, ''));\nif (!isFinite(amount)) amount = 0;\nlet currency = String(data.currency || cfg.currencyDefault || 'PHP').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) || 'PHP';\nlet receiptDate = String(data.receipt_date || '');\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(receiptDate)) receiptDate = meta.submission_date || '';\nlet confidence = Number(data.confidence);\nif (!isFinite(confidence)) confidence = 0;\nif (confidence > 1 && confidence <= 100) confidence = confidence / 100;\nconfidence = Math.min(1, Math.max(0, confidence));\nconst merchant = String(data.merchant || '').trim() || 'Unknown';\nconst minConf = Number(cfg.minConfidence ?? 0.6);\nconst needsReview = (!merchant || merchant === 'Unknown' || amount <= 0 || confidence < minConf);\nconst items = Array.isArray(data.items) ? data.items.map(String).slice(0, 8).join('; ') : '';\nconst category = String(data.category || 'Other');\nreturn {\n  json: {\n    submission_date: meta.submission_date || '',\n    submission_iso: meta.submission_iso || '',\n    telegram_user: meta.telegram_user || '',\n    telegram_message_id: meta.telegram_message_id || '',\n    file_unique_id: meta.file_unique_id || '',\n    merchant, amount, currency,\n    receipt_date: receiptDate, category, items,\n    confidence: Math.round(confidence * 100) / 100,\n    needs_review: needsReview,\n    notes: String(data.notes || '').slice(0, 300),\n    drive_file_id: drive.id || '',\n    drive_link: drive.webViewLink || '',\n    drive_filename: drive.name || '',\n    raw_model_output: raw.slice(0, 2000),\n    processed_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "w2-parse",
+      "name": "Parse Receipt JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3940,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetsDocId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Receipts",
+          "mode": "list",
+          "cachedResultName": "Receipts"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "submission_date": "={{ $json.submission_date }}",
+            "telegram_user": "={{ $json.telegram_user }}",
+            "merchant": "={{ $json.merchant }}",
+            "amount": "={{ $json.amount }}",
+            "currency": "={{ $json.currency }}",
+            "receipt_date": "={{ $json.receipt_date }}",
+            "category": "={{ $json.category }}",
+            "items": "={{ $json.items }}",
+            "confidence": "={{ $json.confidence }}",
+            "needs_review": "={{ $json.needs_review }}",
+            "drive_link": "={{ $json.drive_link }}",
+            "file_unique_id": "={{ $json.file_unique_id }}",
+            "notes": "={{ $json.notes }}",
+            "processed_at": "={{ $json.processed_at }}"
+          },
+          "matchingColumns": [
+            "file_unique_id"
+          ],
+          "schema": [
+            {
+              "id": "submission_date",
+              "displayName": "submission_date",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "telegram_user",
+              "displayName": "telegram_user",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "merchant",
+              "displayName": "merchant",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "amount",
+              "displayName": "amount",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "currency",
+              "displayName": "currency",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "receipt_date",
+              "displayName": "receipt_date",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "category",
+              "displayName": "category",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "items",
+              "displayName": "items",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "needs_review",
+              "displayName": "needs_review",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "drive_link",
+              "displayName": "drive_link",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "file_unique_id",
+              "displayName": "file_unique_id",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "processed_at",
+              "displayName": "processed_at",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w2-append",
+      "name": "Sheets Append Receipt",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        4160,
+        340
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w2-cond-review",
+              "leftValue": "={{ $('Parse Receipt JSON').item.json.needs_review }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w2-if-review",
+      "name": "IF Needs Review",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4380,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Extract Telegram Meta').item.json.chat_id }}",
+        "text": "Receipt logged: {{ $('Parse Receipt JSON').item.json.merchant }} — {{ $('Parse Receipt JSON').item.json.currency }} {{ $('Parse Receipt JSON').item.json.amount }} on {{ $('Parse Receipt JSON').item.json.receipt_date }}. Photo saved to Drive folder {{ $('Parse Receipt JSON').item.json.submission_date }}.",
+        "additionalFields": {}
+      },
+      "id": "w2-reply-ok",
+      "name": "Telegram Reply Confirm",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4600,
+        260
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot API — connect in n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Extract Telegram Meta').item.json.chat_id }}",
+        "text": "Saved, but I am not fully sure about this one (merchant: {{ $('Parse Receipt JSON').item.json.merchant }}, amount: {{ $('Parse Receipt JSON').item.json.amount }}). It is flagged for review in the sheet — reply here or edit the row if I got it wrong. A sharper, well-lit photo helps next time.",
+        "additionalFields": {}
+      },
+      "id": "w2-reply-review",
+      "name": "Telegram Reply Review",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        4600,
+        420
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Telegram Bot API — connect in n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetsDocId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Errors",
+          "mode": "list",
+          "cachedResultName": "Errors"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now.toISO() }}",
+            "workflow": "W2 Telegram Receipts",
+            "node": "={{ $node.name }}",
+            "message_id": "={{ $('Extract Telegram Meta').item.json.telegram_message_id || '' }}",
+            "error": "={{ $json.error ? $json.error.message : 'receipt step failed' }}"
+          },
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "workflow",
+              "displayName": "workflow",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "node",
+              "displayName": "node",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w2-log-error",
+      "name": "Sheets Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3720,
+        560
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets OAuth2 — connect in n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## W2 — Telegram Receipt Photo Processing (Gemini)\nSETUP: 1) Create Telegram bot via BotFather, connect Telegram credentials. 2) Connect Sheets + Drive OAuth. 3) Edit Config (Sheet ID, Drive PDS_Receipts root folder ID). 4) Create a Header Auth credential in n8n: Name = x-goog-api-key, Value = your Gemini API key (free from Google AI Studio); select it on the Gemini Vision Extract node. Works on n8n Cloud AND self-hosted — no env vars, and the key never appears in this JSON. 5) Create Sheet tabs Receipts / Errors (see docs/SHEETS_SCHEMA.md). 6) Activate.\nFLOW: photo -> meta (largest size, 15MB cap) -> dedupe by file_unique_id -> ensure Drive folder Receipts/<YYYY-MM-DD> -> download -> upload ORIGINAL bytes (renamed <date>_<msgid>.<ext> to avoid collisions; original extension kept) -> Gemini (temp 0.1, JSON mode, key via Header Auth credential) -> strict parse+validate (amount/date/confidence normalized, low-confidence flagged needs_review, never throws) -> UPSERT row by file_unique_id (replay-safe) -> Telegram confirmation (or review request / duplicate / usage replies).\nNO SECRETS in this file. Timezone Asia/Manila.",
+        "height": 360,
+        "width": 1180,
+        "color": 5
+      },
+      "id": "w2-note",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        60
+      ]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger Photo": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "IF Is Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Is Photo": {
+      "main": [
+        [
+          {
+            "node": "Extract Telegram Meta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Reply Usage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Telegram Meta": {
+      "main": [
+        [
+          {
+            "node": "IF Too Large",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Too Large": {
+      "main": [
+        [
+          {
+            "node": "Telegram Reply Too Large",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sheets Find Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets Find Receipt": {
+      "main": [
+        [
+          {
+            "node": "IF Is New",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Is New": {
+      "main": [
+        [
+          {
+            "node": "Drive Search Date Folder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Reply Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Search Date Folder": {
+      "main": [
+        [
+          {
+            "node": "IF Date Folder Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Date Folder Exists": {
+      "main": [
+        [
+          {
+            "node": "Emit Date Folder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Drive Create Date Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Create Date Folder": {
+      "main": [
+        [
+          {
+            "node": "Emit Date Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emit Date Folder": {
+      "main": [
+        [
+          {
+            "node": "Telegram Get File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Get File": {
+      "main": [
+        [
+          {
+            "node": "Photo to Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Photo to Base64": {
+      "main": [
+        [
+          {
+            "node": "Attach Date Folder ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Date Folder ID": {
+      "main": [
+        [
+          {
+            "node": "Drive Upload Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Upload Photo": {
+      "main": [
+        [
+          {
+            "node": "IF Upload OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Upload OK": {
+      "main": [
+        [
+          {
+            "node": "Gemini Vision Extract",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sheets Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Vision Extract": {
+      "main": [
+        [
+          {
+            "node": "Parse Receipt JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Receipt JSON": {
+      "main": [
+        [
+          {
+            "node": "Sheets Append Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets Append Receipt": {
+      "main": [
+        [
+          {
+            "node": "IF Needs Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Needs Review": {
+      "main": [
+        [
+          {
+            "node": "Telegram Reply Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram Reply Confirm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Manila",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "w2-1.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

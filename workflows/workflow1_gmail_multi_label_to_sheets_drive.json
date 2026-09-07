@@ -1,0 +1,1546 @@
+{
+  "id": "3b1985c2-b252-4ead-921c-196cc89a8db8",
+  "name": "PDS W1 — Multi-Label Gmail to Sheets & Drive",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "w1-schedule",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-labels",
+              "name": "labels",
+              "type": "array",
+              "value": "['label1', 'label2', 'label3']"
+            },
+            {
+              "id": "cfg-lookback",
+              "name": "lookback",
+              "type": "string",
+              "value": "newer_than:1d"
+            },
+            {
+              "id": "cfg-sheetsDocId",
+              "name": "sheetsDocId",
+              "type": "string",
+              "value": "PASTE_GOOGLE_SHEET_ID_HERE"
+            },
+            {
+              "id": "cfg-driveParentId",
+              "name": "driveParentId",
+              "type": "string",
+              "value": "PASTE_DRIVE_ROOT_FOLDER_ID_HERE"
+            },
+            {
+              "id": "cfg-processedLabel",
+              "name": "processedLabel",
+              "type": "string",
+              "value": "PDS/Processed"
+            },
+            {
+              "id": "cfg-maxResults",
+              "name": "maxResults",
+              "type": "number",
+              "value": 50
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w1-config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        420,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build ONE Gmail search covering every label (single API call).\n// Skips already-processed mail so each run is incremental.\nconst cfg = $input.first().json;\nlet labels = cfg.labels;\nif (typeof labels === 'string') {\n  try { labels = JSON.parse(labels.replace(/'/g, '\"')); }\n  catch (e) { labels = labels.split(',').map(s => s.trim()).filter(Boolean); }\n}\nif (!Array.isArray(labels) || labels.length === 0) {\n  throw new Error('Config.labels must be a non-empty array, e.g. [\"label1\",\"label2\"]');\n}\nconst labelClause = '(' + labels.map(l => `label:${l}`).join(' OR ') + ')';\nconst query = `${cfg.lookback || 'newer_than:1d'} ${labelClause} -label:(${cfg.processedLabel || 'PDS/Processed'})`;\nreturn [{ json: { ...cfg, labels, query } }];"
+      },
+      "id": "w1-build-query",
+      "name": "Build Gmail Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": "={{ $('Config').item.json.maxResults }}",
+        "filters": {
+          "q": "={{ $json.query }}"
+        },
+        "options": {
+          "downloadAttachments": true,
+          "dataPropertyAttachmentsPrefixName": "attachment_"
+        },
+        "simple": false
+      },
+      "id": "w1-gmail-fetch",
+      "name": "Gmail Fetch Labeled Emails",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        860,
+        420
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w1-cond-found",
+              "leftValue": "={{ $json }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w1-if-found",
+      "name": "IF Emails Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1080,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Normalize one Gmail message -> email record. Never throws on odd headers.\n// Works with BOTH header shapes: Gmail API {name,value} and mailparser raw\n// lines {key,line} (raw mode stores the full line, e.g. 'From: John <j@x>').\nconst msg = $input.item.json;\nconst headers = {};\nfor (const h of (msg.payload?.headers || msg.headers || [])) {\n  const k = String(h.name || h.key || '').toLowerCase();\n  if (!k) continue;\n  let v = (h.value != null ? String(h.value) : String(h.line || ''));\n  if (v.toLowerCase().startsWith(k + ':')) v = v.slice(k.length + 1).trim();\n  headers[k] = v;\n}\nfunction parseFrom(raw) {\n  raw = String(raw || '');\n  const m = raw.match(/^\\s*\"?([^\"<>]*)\"?\\s*<([^<>]+)>\\s*$/);\n  if (m) return { name: (m[1] || '').trim().replace(/^\"|\"$/g, ''), email: m[2].trim().toLowerCase() };\n  const e = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);\n  return { name: raw.replace(/<[^>]*>/g, '').trim().replace(/^[\"']|[\"']$/g, '') || 'Unknown Sender', email: (e ? e[0] : '').toLowerCase() };\n}\nfunction sanitize(name) {\n  return String(name || 'Unknown Sender').replace(/[\\\\/:*?\"<>|\\u0000-\\u001F]/g, '').replace(/\\s+/g, ' ').trim().slice(0, 80) || 'Unknown Sender';\n}\nconst from = parseFrom(headers['from'] || msg.from);\nconst dateRaw = headers['date'] || msg.date || msg.internalDate;\nconst d = new Date(isNaN(Number(dateRaw)) ? dateRaw : Number(dateRaw));\nconst valid = !isNaN(d.getTime());\nconst pad = n => String(n).padStart(2, '0');\nconst dateReceived = valid ? `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}` : 'unknown-date';\nconst dateISO = valid ? d.toISOString() : '';\nconst labelIds = msg.labelIds || [];\nlet cfg = {};\ntry { cfg = $('Config').item.json; } catch (e) { cfg = $('Config').first().json; }\nconst cfgLabels = Array.isArray(cfg.labels) ? cfg.labels : [];\nconst matchedLabel = cfgLabels.find(l => labelIds.includes(l)) || labelIds.filter(x => !['INBOX','UNREAD','IMPORTANT','CATEGORY_PERSONAL'].includes(x))[0] || 'unlabeled';\nconst binaries = $input.item.binary || {};\nconst attachmentNames = Object.keys(binaries).filter(k => k.startsWith('attachment_'));\nconst senderFolder = sanitize(from.name);\nreturn {\n  json: {\n    message_id: msg.id || msg.threadId || '',\n    thread_id: msg.threadId || '',\n    date_received: dateReceived,\n    date_iso: dateISO,\n    label: matchedLabel,\n    sender_name: from.name || 'Unknown Sender',\n    sender_folder: senderFolder,\n    sender_email: from.email,\n    subject: headers['subject'] || msg.subject || '(no subject)',\n    snippet: String(msg.snippet || '').slice(0, 300),\n    attachment_count: attachmentNames.length,\n    attachment_keys: attachmentNames,\n    drive_folder_path: `${matchedLabel}/${dateReceived}/${senderFolder}`,\n    processed_at: new Date().toISOString()\n  },\n  binary: $input.item.binary\n};"
+      },
+      "id": "w1-extract",
+      "name": "Extract Email Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetsDocId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Emails",
+          "mode": "list",
+          "cachedResultName": "Emails"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "message_id",
+              "lookupValue": "={{ $json.message_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w1-find-existing",
+      "name": "Sheets Find Existing",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1520,
+        420
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w1-cond-new",
+              "leftValue": "={{ $json.message_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w1-if-new",
+      "name": "IF Is New",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1740,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetsDocId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Emails",
+          "mode": "list",
+          "cachedResultName": "Emails"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message_id": "={{ $('Extract Email Fields').item.json.message_id }}",
+            "date_received": "={{ $('Extract Email Fields').item.json.date_received }}",
+            "label": "={{ $('Extract Email Fields').item.json.label }}",
+            "sender_name": "={{ $('Extract Email Fields').item.json.sender_name }}",
+            "sender_email": "={{ $('Extract Email Fields').item.json.sender_email }}",
+            "subject": "={{ $('Extract Email Fields').item.json.subject }}",
+            "snippet": "={{ $('Extract Email Fields').item.json.snippet }}",
+            "attachment_count": "={{ $('Extract Email Fields').item.json.attachment_count }}",
+            "drive_folder_path": "={{ $('Extract Email Fields').item.json.drive_folder_path }}",
+            "processed_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "message_id"
+          ],
+          "schema": [
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "date_received",
+              "displayName": "date_received",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "label",
+              "displayName": "label",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "sender_name",
+              "displayName": "sender_name",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "sender_email",
+              "displayName": "sender_email",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "subject",
+              "displayName": "subject",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "snippet",
+              "displayName": "snippet",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "attachment_count",
+              "displayName": "attachment_count",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "drive_folder_path",
+              "displayName": "drive_folder_path",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "processed_at",
+              "displayName": "processed_at",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w1-log-email",
+      "name": "Sheets Log Email",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1960,
+        340
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w1-cond-att",
+              "leftValue": "={{ $('Extract Email Fields').item.json.attachment_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w1-if-att",
+      "name": "IF Has Attachments",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2180,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Fan out: one item per attachment. Binaries are re-attached from the\n// ORIGINAL Extract output via pairedItem (the Sheets nodes in between drop\n// binaries; Code nodes and this pairing preserve them). allItems mode:\n// returning an array is correct here.\nconst extracts = $('Extract Email Fields').all();\nconst seen = new Set();\nconst out = [];\nfor (const it of $input.all()) {\n  const p = it.pairedItem;\n  const idx = (p == null) ? -1 : (typeof p === 'number' ? p : (Array.isArray(p) ? ((p[0] && p[0].item != null) ? p[0].item : -1) : p.item));\n  if (seen.has(idx)) continue;\n  seen.add(idx);\n  const ex = extracts[idx];\n  if (!ex) continue;\n  const email = ex.json || {};\n  const bins = ex.binary || {};\n  const keys = (email.attachment_keys && email.attachment_keys.length ? email.attachment_keys : Object.keys(bins).filter(k => k.startsWith('attachment_')));\n  for (const k of keys) {\n    if (!bins[k]) continue;\n    out.push({\n      json: {\n        message_id: email.message_id || '',\n        label: email.label || 'unlabeled',\n        date_received: email.date_received || 'unknown-date',\n        sender_name: email.sender_name || 'Unknown Sender',\n        sender_folder: email.sender_folder || 'Unknown Sender',\n        sender_email: email.sender_email || '',\n        subject: email.subject || '',\n        drive_folder_path: email.drive_folder_path || '',\n        original_filename: bins[k].fileName || k,\n        mime_type: bins[k].mimeType || 'application/octet-stream'\n      },\n      binary: { data: bins[k] }\n    });\n  }\n}\nreturn out;"
+      },
+      "id": "w1-split-att",
+      "name": "Prepare Attachment Work",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Dedupe to one item per distinct Drive folder path.\n// The folder-ensure loop below runs single-item, so every lookup is unambiguous.\nconst seen = new Map();\nfor (const item of $input.all()) {\n  const j = item.json;\n  if (!j.drive_folder_path || seen.has(j.drive_folder_path)) continue;\n  seen.set(j.drive_folder_path, { json: { path: j.drive_folder_path, label: j.label, date_received: j.date_received, sender_folder: j.sender_folder } });\n}\nreturn [...seen.values()];"
+      },
+      "id": "w1-unique-paths",
+      "name": "Unique Folder Paths",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "w1-loop",
+      "name": "Loop Over Paths",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2840,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "query",
+        "queryString": "={{ \"name = '\" + $json.label.replace(/'/g, \"\\\\'\") + \"' and '\" + $('Config').first().json.driveParentId + \"' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false\" }}",
+        "returnAll": false,
+        "limit": 5,
+        "options": {}
+      },
+      "id": "w1-search-l1",
+      "name": "Drive Search Label Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3060,
+        280
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w1-cond-l1",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w1-if-l1",
+      "name": "IF Label Folder Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3280,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "={{ $('Loop Over Paths').item.json.label }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.driveParentId }}"
+        },
+        "options": {}
+      },
+      "id": "w1-mkdir-l1",
+      "name": "Drive Create Label Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3500,
+        200
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Rebuild loop item: folder-plan context + resolved label folder id.\n// Single item in flight (batchSize 1), so pairing back is unambiguous.\nlet plan = {};\ntry { plan = $('Loop Over Paths').item.json; }\ncatch (e) { plan = $('Loop Over Paths').first().json; }\nconst labelId = ($input.item.json && $input.item.json.id) || '';\nreturn { json: { ...plan, label_folder_id: labelId } };"
+      },
+      "id": "w1-attach-l1",
+      "name": "Attach Label Folder ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3720,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "query",
+        "queryString": "={{ \"name = '\" + $('Attach Label Folder ID').item.json.date_received.replace(/'/g, \"\\\\'\") + \"' and '\" + $('Attach Label Folder ID').item.json.label_folder_id + \"' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false\" }}",
+        "returnAll": false,
+        "limit": 5,
+        "options": {}
+      },
+      "id": "w1-search-l2",
+      "name": "Drive Search Date Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3940,
+        280
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w1-cond-l2",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w1-if-l2",
+      "name": "IF Date Folder Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4160,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "={{ $('Attach Label Folder ID').item.json.date_received }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Attach Label Folder ID').item.json.label_folder_id }}"
+        },
+        "options": {}
+      },
+      "id": "w1-mkdir-l2",
+      "name": "Drive Create Date Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        4380,
+        200
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Rebuild loop item: plan + label id + resolved date folder id.\nlet plan = {};\ntry { plan = $('Attach Label Folder ID').item.json; }\ncatch (e) { plan = $('Attach Label Folder ID').first().json; }\nconst dateId = ($input.item.json && $input.item.json.id) || '';\nreturn { json: { ...plan, date_folder_id: dateId } };"
+      },
+      "id": "w1-attach-l2",
+      "name": "Attach Date Folder ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4600,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "operation": "search",
+        "searchMethod": "query",
+        "queryString": "={{ \"name = '\" + $('Attach Date Folder ID').item.json.sender_folder.replace(/'/g, \"\\\\'\") + \"' and '\" + $('Attach Date Folder ID').item.json.date_folder_id + \"' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false\" }}",
+        "returnAll": false,
+        "limit": 5,
+        "options": {}
+      },
+      "id": "w1-search-l3",
+      "name": "Drive Search Sender Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        4820,
+        280
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w1-cond-l3",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w1-if-l3",
+      "name": "IF Sender Folder Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        5040,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "operation": "create",
+        "name": "={{ $('Attach Date Folder ID').item.json.sender_folder }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Attach Date Folder ID').item.json.date_folder_id }}"
+        },
+        "options": {}
+      },
+      "id": "w1-mkdir-l3",
+      "name": "Drive Create Sender Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        5260,
+        200
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Emit { path, folder_id } for this loop iteration (single object: forEach\n// mode rejects arrays). Post-loop, the join keys attachments to these by path.\nlet plan = {};\ntry { plan = $('Attach Date Folder ID').item.json; }\ncatch (e) { plan = $('Attach Date Folder ID').first().json; }\nconst senderId = ($input.item.json && $input.item.json.id) || plan.date_folder_id || '';\nreturn { json: { path: plan.path || '', folder_id: senderId } };"
+      },
+      "id": "w1-emit-folder",
+      "name": "Emit Folder Mapping",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5480,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2,
+        "options": {}
+      },
+      "id": "w1-merge",
+      "name": "Wait For Folders",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2180,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Barrier join (binary-safe): Merge appended attachment items (with binary)\n// + loop-done folder mappings {path, folder_id}. Attach folder id per path.\n// Mapping items are dropped; only attachment items flow on.\nconst maps = [];\nconst atts = [];\nfor (const item of $input.all()) {\n  if (item.json && item.json.original_filename) atts.push(item);\n  else if (item.json && item.json.path) maps.push(item.json);\n}\nif (atts.length === 0) return [];\nconst out = [];\nfor (const a of atts) {\n  const j = a.json;\n  const hit = maps.find(m => m.path === j.drive_folder_path);\n  if (!hit || !hit.folder_id) {\n    throw new Error(`No Drive folder resolved for path: ${j.drive_folder_path}`);\n  }\n  out.push({ json: { ...j, folder_id: hit.folder_id }, binary: a.binary });\n}\nreturn out;"
+      },
+      "id": "w1-attach-folder",
+      "name": "Attach Folder ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        520
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "name": "={{ $json.original_filename }}",
+        "inputDataFieldName": "data",
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.folder_id }}"
+        },
+        "options": {}
+      },
+      "id": "w1-upload",
+      "name": "Drive Upload Attachment",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2620,
+        520
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "",
+          "name": "Google Drive OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "w1-cond-upok",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {},
+        "looseTypeValidation": true
+      },
+      "id": "w1-if-upok",
+      "name": "IF Upload OK",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2840,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetsDocId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Attachments",
+          "mode": "list",
+          "cachedResultName": "Attachments"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message_id": "={{ $('Attach Folder ID').item.json.message_id }}",
+            "filename": "={{ $('Attach Folder ID').item.json.original_filename }}",
+            "mime_type": "={{ $('Attach Folder ID').item.json.mime_type }}",
+            "label": "={{ $('Attach Folder ID').item.json.label }}",
+            "date_received": "={{ $('Attach Folder ID').item.json.date_received }}",
+            "sender_name": "={{ $('Attach Folder ID').item.json.sender_name }}",
+            "drive_file_id": "={{ $json.id }}",
+            "drive_link": "={{ $json.webViewLink }}",
+            "processed_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "message_id",
+            "filename"
+          ],
+          "schema": [
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "filename",
+              "displayName": "filename",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "mime_type",
+              "displayName": "mime_type",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "label",
+              "displayName": "label",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "date_received",
+              "displayName": "date_received",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "sender_name",
+              "displayName": "sender_name",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "drive_file_id",
+              "displayName": "drive_file_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "drive_link",
+              "displayName": "drive_link",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "processed_at",
+              "displayName": "processed_at",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w1-log-att",
+      "name": "Sheets Log Attachment",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3060,
+        460
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Config').first().json.sheetsDocId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Errors",
+          "mode": "list",
+          "cachedResultName": "Errors"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now.toISO() }}",
+            "workflow": "W1 Gmail to Sheets and Drive",
+            "node": "={{ $node.name }}",
+            "message_id": "={{ $json.message_id || '' }}",
+            "error": "={{ $json.error ? $json.error.message : 'attachment step failed' }}"
+          },
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "workflow",
+              "displayName": "workflow",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "node",
+              "displayName": "node",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "message_id",
+              "displayName": "message_id",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "w1-log-error",
+      "name": "Sheets Log Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3060,
+        640
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets OAuth2 — connect in n8n UI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "addLabels",
+        "messageId": "={{ $('Extract Email Fields').item.json.message_id }}",
+        "labelIds": [
+          "={{ $('Config').first().json.processedLabel }}"
+        ],
+        "options": {}
+      },
+      "id": "w1-mark",
+      "name": "Gmail Mark Processed",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2180,
+        640
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail OAuth2 — connect in n8n UI"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "content": "## W1 — Multi-Label Gmail to Sheets and Drive\nSETUP: 1) Connect Gmail / Sheets / Drive OAuth. 2) Edit Config node (labels, Sheet ID, Drive ROOT folder ID — create folder PDS_Gmail_Attachments first). 3) Create Gmail label PDS/Processed. 4) Create Sheet tabs Emails / Attachments / Errors (see docs/SHEETS_SCHEMA.md). 5) Activate.\nFLOW: Schedule(15m) -> ONE Gmail query for ALL labels (excludes PDS/Processed; Gmail node Simple=FALSE so raw headers/labelIds/attachments arrive) -> extract sender/date/label -> dedupe by message_id (Sheets read) -> UPSERT email row -> if attachments: Prepare Attachment Work re-attaches binaries from the original Extract output via pairedItem (Sheets nodes drop binaries) -> folder loop (Label/Date/SenderName, search-then-create per level, batchSize 1) AND the attachment items both feed the Merge (input 0 = attachments, input 1 = loop-done) -> join folder ids -> upload with ORIGINAL filename -> upsert attachment row (message_id+filename) -> label PDS/Processed.\nRETRY: only fully-handled mail gets PDS/Processed; failures land in Errors tab and are retried next poll; Sheets upserts make retries row-safe. Timezone Asia/Manila in workflow settings.",
+        "height": 340,
+        "width": 1140,
+        "color": 4
+      },
+      "id": "w1-note",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        60
+      ]
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Build Gmail Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gmail Query": {
+      "main": [
+        [
+          {
+            "node": "Gmail Fetch Labeled Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Fetch Labeled Emails": {
+      "main": [
+        [
+          {
+            "node": "IF Emails Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Emails Found": {
+      "main": [
+        [
+          {
+            "node": "Extract Email Fields",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Extract Email Fields": {
+      "main": [
+        [
+          {
+            "node": "Sheets Find Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets Find Existing": {
+      "main": [
+        [
+          {
+            "node": "IF Is New",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Is New": {
+      "main": [
+        [
+          {
+            "node": "Sheets Log Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail Mark Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets Log Email": {
+      "main": [
+        [
+          {
+            "node": "IF Has Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Has Attachments": {
+      "main": [
+        [
+          {
+            "node": "Prepare Attachment Work",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gmail Mark Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unique Folder Paths": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Paths": {
+      "main": [
+        [
+          {
+            "node": "Wait For Folders",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Drive Search Label Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Search Label Folder": {
+      "main": [
+        [
+          {
+            "node": "IF Label Folder Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Label Folder Exists": {
+      "main": [
+        [
+          {
+            "node": "Attach Label Folder ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Drive Create Label Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Create Label Folder": {
+      "main": [
+        [
+          {
+            "node": "Attach Label Folder ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Label Folder ID": {
+      "main": [
+        [
+          {
+            "node": "Drive Search Date Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Search Date Folder": {
+      "main": [
+        [
+          {
+            "node": "IF Date Folder Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Date Folder Exists": {
+      "main": [
+        [
+          {
+            "node": "Attach Date Folder ID",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Drive Create Date Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Create Date Folder": {
+      "main": [
+        [
+          {
+            "node": "Attach Date Folder ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Date Folder ID": {
+      "main": [
+        [
+          {
+            "node": "Drive Search Sender Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Search Sender Folder": {
+      "main": [
+        [
+          {
+            "node": "IF Sender Folder Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Sender Folder Exists": {
+      "main": [
+        [
+          {
+            "node": "Emit Folder Mapping",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Drive Create Sender Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Create Sender Folder": {
+      "main": [
+        [
+          {
+            "node": "Emit Folder Mapping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emit Folder Mapping": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Paths",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait For Folders": {
+      "main": [
+        [
+          {
+            "node": "Attach Folder ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Folder ID": {
+      "main": [
+        [
+          {
+            "node": "Drive Upload Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Upload Attachment": {
+      "main": [
+        [
+          {
+            "node": "IF Upload OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Upload OK": {
+      "main": [
+        [
+          {
+            "node": "Sheets Log Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sheets Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets Log Attachment": {
+      "main": [
+        [
+          {
+            "node": "Gmail Mark Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Attachment Work": {
+      "main": [
+        [
+          {
+            "node": "Unique Folder Paths",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Wait For Folders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Manila",
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "w1-1.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

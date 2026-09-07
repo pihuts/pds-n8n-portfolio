@@ -1,0 +1,8 @@
+# Never publish local test artifacts or credentials
+.env
+*_reply.txt
+_model_*.txt
+_spark_*
+tests/workflow2_TEST_spark_via_zen_DO_NOT_SUBMIT.json
+node_modules/
+*.log
