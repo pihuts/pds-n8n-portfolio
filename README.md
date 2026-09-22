@@ -1,6 +1,20 @@
-# PDS n8n Assessment Portfolio
+# Receipt Processing & Email Operations Automation
 
-Two production-grade n8n workflows for the Precision Data Solutions assessment:
+Two n8n workflows built for the Precision Data Solutions assessment, turning
+incoming emails and receipt photos into structured records and organized files.
+
+**What to inspect:** [recorded receipt vision-chain demo](docs/images/demo_run.mp4),
+[test report](docs/TEST_REPORT.md), and [importable workflows](workflows/).
+
+The implementation handles duplicate inputs, repeat writes, invalid extracted data,
+and branch-level failures through stable keys, idempotent upserts, validation,
+and explicit error reporting. JavaScript tests exercise the workflow Code nodes.
+
+**Scope:** this is an assessment implementation. The recording verifies the receipt
+vision chain through a webhook harness; it does not establish a full production
+Telegram/Google deployment, extraction accuracy rate, or throughput benchmark.
+
+## Workflows
 
 - **Workflow 1 — Multi-Label Gmail to Google Sheets & Drive.** Polls a Gmail
   inbox on a schedule for incoming mail under multiple labels, logs sender
