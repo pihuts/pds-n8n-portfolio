@@ -1,4 +1,10 @@
-# Test report — 2026-09-06 (all green)
+# Test report
+
+## Offline recheck — 29 September 2026
+
+`node tests/test_workflows.js` passes structural checks; `node tests/test_code_nodes.js` passes 45 assertions. This recheck did not execute n8n or external services. The dated live observations below are historical.
+
+## Original observations — 6 September 2026
 
 Harness: `node tests/test_workflows.js` and `node tests/test_code_nodes.js`.
 Engine cross-check: local n8n 2.37.10 (`npm i n8n@2.37.10`), node operation
@@ -74,7 +80,7 @@ tests/fixtures/real_*.jpg with ground truth read independently first.
 - W1 poll processes up to 50 mails/run (Config maxResults); more than that
   drains over consecutive polls — intentional API courtesy.
 - A Drive file re-uploaded after a mid-run crash can leave a duplicate byte
-  copy; Sheet rows stay exact via upsert keys, and the mail is retried
+  copy; Sheet upsert keys reduce duplicate writes but do not provide atomic uniqueness under concurrent runs; the mail is retried
   unlabeled until fully handled.
 - Telegram `file_size` is absent on some photo sizes; oversize then enforces
   after download rather than before (still enforced).
@@ -83,7 +89,7 @@ tests/fixtures/real_*.jpg with ground truth read independently first.
 ## In-engine verification (n8n 2.37.10, live run 2026-09-07)
 
 Beyond the offline harness above, the vision chain was executed INSIDE a real n8n
-instance (Docker, n8n 2.37.10) to prove the production node chain works in-engine:
+instance (Docker, n8n 2.37.10) to exercise the receipt vision-chain harness in-engine:
 
 - Both portfolio workflows import cleanly into n8n 2.37.10 (0 defects, 0 warnings).
 - A demo harness workflow (`demo/demo_receipt_vision_chain.json`) mirrors W2's
@@ -98,5 +104,7 @@ instance (Docker, n8n 2.37.10) to prove the production node chain works in-engin
 - Evidence: `docs/images/demo_run.mp4` (screen recording of the live run) and
   `docs/images/demo_*.png` (green-node canvas, node detail views, executions tab).
 - The demo webhook supplies the vision API key per request; it is built into the
-  Authorization header at runtime and never persisted in workflow JSON, item
-  data, or this repository.
+  Authorization header at runtime. No key is embedded in the exported workflow
+  JSON, but `go_key` is carried in webhook/item data and may be persisted in
+  retained execution records. The historical harness is not a production
+  credential-storage pattern.

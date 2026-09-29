@@ -34,14 +34,14 @@ the workflow files.
 ## Watch it run
 
 A real execution inside n8n 2.37.10 (Docker), recorded end-to-end — webhook in,
-photo downloaded, vision extraction, validated record out in **11.2 s**:
+photo downloaded, vision extraction, validated record out in **11.2 s in one observed run**. This is not a latency or throughput benchmark:
 
 https://github.com/pihuts/pds-n8n-portfolio/raw/main/docs/images/demo_run.mp4
 
 ![Live run — every node green](docs/images/demo_execution_green.png)
 
 The demo harness (`demo/demo_receipt_vision_chain.json`) mirrors W2's hot path
-with a webhook instead of the Telegram trigger — **`Photo to Base64` is the
+with a webhook instead of the Telegram trigger and GLM-5.3-flash through an OpenAI-compatible endpoint instead of W2's Gemini endpoint — **`Photo to Base64` is the
 verbatim W2 code** and the parser applies W2's exact validation. What the run
 produced from a real receipt photo:
 
@@ -101,8 +101,7 @@ tests/
 To reproduce the in-engine demo: import `demo/demo_receipt_vision_chain.json`,
 click **Execute workflow**, then POST
 `{ "image_url": "<public URL of a receipt image>", "go_key": "<your key>" }`
-to `/webhook-test/receipt-demo` — the key is read per request and never
-persisted. To run W2's chain against a different vision model, only the URL,
+to `/webhook-test/receipt-demo`. This historical harness carries `go_key` in webhook and item data; execution retention can therefore persist it. Use a disposable key and a local test instance with execution retention disabled, then remove retained test executions. A reusable deployment should move authentication to an n8n credential. To run W2's chain against a different vision model, only the URL,
 model name, and reply shape in the demo's vision nodes need changing; W2
 itself ships pointed at Google Gemini with the key in a Header-Auth credential.
 
@@ -112,11 +111,14 @@ No secrets are stored in this package. The Gemini API key is added in the
 n8n UI as a Header-Auth credential (header name `x-goog-api-key`) and
 selected on the Gemini node - works on n8n Cloud and self-hosted, no env
 vars required. The Telegram token lives in the n8n Telegram credential. The
-demo workflow likewise takes its key per request and builds the
-Authorization header at runtime, so nothing sensitive lands in this repo,
-the workflow JSON, or execution data.
+historical demo workflow takes its key per request and builds the
+Authorization header at runtime. The exported JSON contains no key, but the supplied
+`go_key` enters execution item data and may be retained by n8n. Do not treat the demo
+harness as a production credential-storage pattern.
 
 ## Tests
+
+**Latest offline check: 29 September 2026 — structural checks pass; 45 code-node assertions pass.** These checks do not execute the external services or measure extraction accuracy.
 
 Run from the repo root (Node.js 18+, no extra packages needed):
 
